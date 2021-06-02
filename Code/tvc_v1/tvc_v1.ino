@@ -4,28 +4,20 @@
 class Bno055 
 {
 private:
+    // Data Structs
     struct Accelerometer {
-        float x, y, z;  // m/s^2
+        double x, y, z;  // m/s^2
     };
     struct Magnetometer {
-        float x, y, z;  // mT
+        double x, y, z;  // mT
     };
     struct Gyroscope {
-        double x, y, z;  // dps (degrees per second)
+        double x, y, z;  // rad/s (radians per second)
     };
     struct Quaternion {
         double w = 1.0, x = 0.0, y = 0.0, z = 0.0;   // initial conditions
         double wdot, xdot, ydot, zdot;
     };
-
-    const int bnoAddress_ = 0x28;
-    const int powerMode_ = 0x3E;
-    const int normal_ = 0x00;
-    const int oprMode_ = 0x3D;
-    const int amg_ = 0x07;
-    const int sysTrigger_ = 0x3F;
-
-    float angle;
 
     // initializing structs
     Accelerometer a;
@@ -33,75 +25,150 @@ private:
     Gyroscope g;
     Quaternion q;
 
+    //{
+    const int BNO_ADDR = 0x28;          // I2C Address of the sensor                                            MAY CHANGE WITH MULTIPLE SENSORS
+
+    const int PWR_MODE = 0x3E;          // Power mode,default normal                more info section 3.2
+    const int NORMAL = 0x00;            // all required sensors are always on
+
+    const int OPR_MODE = 0x3D;          // Change operating mode                    more info section 3.3
+    const int CONFIGMODE = 0x00;        // Config mode... nothing else
+    const int AMG = 0x07;               // Sensor actively measuring
+
+    const int AXIS_MAP_CONFIG = 0x41;   // remap axes, default 0x24                 more info section 3.4
+    const int yz_remap_ = 0x18;         // z: up/down y: forward/backward x: right/left
+
+    const int AXIS_MAP_SIGN = 0x42;     //                                                                      CHECK AXIS SIGNS, MAY NOT BE NEEDED
+
+    const int SYS_TRIGGER = 0x3F;       // Used to set clock, reset, int
+    const int CLK_SEL = 0x80;           // sets external crystal clock
+
+    const int ACC_DATA_X_LSB = 0x08;    // Lower byte of X axis acc data
+    const int ACC_Config = 0x08;        // used to set range, default 0x0D
+    const int ACC_RANGE = 0x11;         // can only be changed in sensor mode       more info section 3.5.2
+
+    const int GYR_DATA_X_LSB = 0x14;    // Lower byte of X axis gyr data
+    const int GYR_Config_0 = 0x0A;      // used to set range/bandwidth
+    const int GYR_RANGE = 0x11;         // 1000 dps, default 2000 dps & 32 Hz       more info section 3.5.3
+
+    const int UNIT_SEL = 0x3B;          // Change units of measurements
+    const int dps_to_rps_ = 0x02;       // changes units of gyr to rad/s            more info section 3.6.1
+
+    const int MAG_DATA_X_LSB = 0x0E;    // Lower byte of X axis mag data
+    //}
 public:
-    // Initializes the BNO055 Sensor and remaps axes to the correct orientation
+    /*  Initializes the BNO055 Sensor by setting up the specific configurations 
+        required, remapping axes, and preparing the sensor to read data     */
     void InitializeBno() 
     {
-        // POWER MODE
-        Wire.beginTransmission(bnoAddress_);
-        Wire.write(powerMode_);
-        Wire.write(normal_);
-        Wire.endTransmission();
-        delay(100);             // reduce time later?
+        char data[2];                        // temp variable to hold the addresses
 
-        // CONFIG MODE (3.3 Operation Modes)
-        Wire.beginTransmission(bnoAddress_);
-        Wire.write(oprMode_);
-        Wire.write(0x00);       // puts BNO into CONFIG mode
-        Wire.endTransmission();
+        // Resetting the power and operation modes back to default in case they were switched
+        data[0] = PWR_MODE; data[1] = NORMAL;
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(data, 2);
+        Wire.endTransmission(true); delay(100);
+        data[0] = OPR_MODE; data[1] = CONFIGMODE;
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(data, 2);
+        Wire.endTransmission(true); delay(100);
 
-        // REMAPPING AXES (3.4 Axis Remap)
-        Wire.beginTransmission(bnoAddress_);
-        Wire.write(0x41);
-        Wire.write(0x18);       // z-vertical, y-front x- horizontal      default: 0x24
-        Wire.endTransmission();
+        // Remapping axes
+        data[0] = AXIS_MAP_CONFIG; data[1] = yz_remap_;
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(data, 2);
+        Wire.endTransmission(true); delay(20);
 
-        // SETTING EXTERNAL CRYSTAL (4.3.63 SYS_TRIGGER)
-        Wire.beginTransmission(bnoAddress_);
-        Wire.write(sysTrigger_);
-        Wire.write(0x80);
-        Wire.endTransmission();
+        // Setting external crystal use
+        data[0] = SYS_TRIGGER; data[1] = CLK_SEL;
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(data, 2);
+        Wire.endTransmission(true); delay(20);
 
-        // OPERATION MODE (3.3 Operation Modes)
-        Wire.beginTransmission(bnoAddress_);
-        Wire.write(oprMode_);
-        Wire.write(amg_);        // puts BNO into AMG mode (activates all sensors)
-        Wire.endTransmission();
+        // Adjusting accelerometer config
+        data[0] = ACC_Config; data[1] = ACC_RANGE;
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(data, 2);
+        Wire.endTransmission(true); delay(20);
 
-        Serial.println("Bno055 Initialized");
+        // Adjusting gyroscope config
+        data[0] = GYR_Config_0; data[1] = GYR_RANGE;
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(data, 2);
+        Wire.endTransmission(true); delay(20);
+
+        // Changing gyroscope units to rad/s
+        data[0] = UNIT_SEL; data[1] = dps_to_rps_;
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(data, 2);
+        Wire.endTransmission(true); delay(20);
+
+        // Changing operating mode to AMG
+        data[0] = OPR_MODE; data[1] = AMG;
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(data, 2);
+        Wire.endTransmission(true); delay(100);
+
+        Serial.println("BNO055 Initialized");
     }
 
-    // Gets the raw data from the BNO055 Sensor and puts the data in their respective arrays
-    void getBnoData() 
+    // Gets the raw data from the BNO055 Sensor, isAlone: whether this function is being called by itself (true) or within another function (false)
+    void getBnoData(bool isAlone)
     {
         // Starts transmission with the sensor
-        Wire.beginTransmission(bnoAddress_);
-        Wire.write(0x08);
+        Wire.beginTransmission(BNO_ADDR);
+        Wire.write(ACC_DATA_X_LSB);
         Wire.endTransmission(false);
-        Wire.requestFrom(bnoAddress_,18,true);
+        Wire.requestFrom(BNO_ADDR, 18, true);
 
         // Puts raw data into structs
+        a.x = (Wire.read() | Wire.read()<<8 ) / 100.00;  // m/s^2
+        a.y = (Wire.read() | Wire.read()<<8 ) / 100.00;  // m/s^2
+        a.z = (Wire.read() | Wire.read()<<8 ) / 100.00;  // m/s^2
 
-        a.x = (int16_t)(Wire.read()|Wire.read()<<8 )/100.00;  // m/s^2
-        a.y = (int16_t)(Wire.read()|Wire.read()<<8 )/100.00;  // m/s^2
-        a.z = (int16_t)(Wire.read()|Wire.read()<<8 )/100.00;  // m/s^2
-
-        m.x = (int16_t)(Wire.read()|Wire.read()<<8 )/16.00;   // mT
-        m.y = (int16_t)(Wire.read()|Wire.read()<<8 )/16.00;   // mT
-        m.z = (int16_t)(Wire.read()|Wire.read()<<8 )/16.00;   // mT
+        m.x = (Wire.read() | Wire.read()<<8) / 16.00;   // mT
+        m.y = (Wire.read() | Wire.read()<<8) / 16.00;   // mT
+        m.z = (Wire.read() | Wire.read()<<8) / 16.00;   // mT
         
-        g.x = (int16_t)(Wire.read()|Wire.read()<<8 )/16.00;   // Dps
-        g.y = (int16_t)(Wire.read()|Wire.read()<<8 )/16.00;   // Dps
-        g.z = (int16_t)(Wire.read()|Wire.read()<<8 )/16.00;   // Dps
+        g.x = (int16_t)(Wire.read() | Wire.read()<<8) / 900.00 ;   // rad/s
+        g.y = (int16_t)(Wire.read() | Wire.read()<<8) / 900.00 ;   // rad/s
+        g.z = (int16_t)(Wire.read() | Wire.read()<<8) / 900.00 ;   // rad/s
 
         // End transmission with the sensor
         Wire.endTransmission();
+
+        
+        Serial.print(a.x, 9);
+        Serial.print(" ");
+        Serial.print(a.y, 9);
+        Serial.print(" ");
+        Serial.print(a.z, 9);
+        Serial.print(" ");
+        Serial.print(m.x, 9);
+        Serial.print(" ");
+        Serial.print(m.y, 9);
+        Serial.print(" ");
+        Serial.print(m.z, 9);
+        Serial.print(" ");
+        Serial.print(g.x, 9);
+        Serial.print(" ");
+        Serial.print(g.y, 9);
+        Serial.print(" ");
+        Serial.print(g.z, 9);
+        
+        // terminates line or adds a space depending on whether it is in another function
+        if (isAlone == true) 
+        {
+            Serial.println();
+        } else {
+            Serial.print(" ");
+        }
     }
 
     // Calculates the quaternion position, dt is the sampling time in seconds
     void getQuaternions(double dt)
     {
-        getBnoData(); // need gyro reading for quaternion calculations
+        getBnoData(false); // need gyro reading for quaternion calculations, within another function
         
         // temp variables, represent half of each component of the quaternion vector
         double halfW = 0.5 * q.w;
@@ -111,9 +178,7 @@ public:
 
         double norm = 0.0;    // used to normalize the quaternion (unit vector)
 
-        angle += g.x * dt;
-
-        // quaternion derivatives, math derived elsewhere
+        // quaternion derivatives, math derivation: https://www.x-io.co.uk/res/doc/madgwick_internal_report.pdf
         q.wdot = -halfX * g.x - halfY * g.y - halfZ * g.z; // w
         q.xdot =  halfW * g.x + halfY * g.z - halfZ * g.y; // x
         q.ydot =  halfW * g.y - halfX * g.z + halfZ * g.x; // y
@@ -126,8 +191,6 @@ public:
         q.z += q.zdot * dt;
 
         norm = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z; 
-        //Serial.print(norm, 9);
-        //Serial.print(" ");
         norm = sqrt(norm);
 
         q.w = q.w / norm;
@@ -154,22 +217,16 @@ public:
         Serial.print(q.z, 9);
         Serial.print(" ");
         Serial.print(norm, 9);
-        Serial.print(" ");
-        Serial.print(angle);
-        
+
         Serial.println();
-
-        
-
-       
     }
 };
 
 Bno055 bno;                 // creating object bno
 
-long pMillis = 0;           // ms (milliseconds)
+long pMillis = 0;            // ms (milliseconds)
 double interval = 100.0;     // ms (milliseconds)
-int i = 0;
+
 
 void setup() 
 {
@@ -186,11 +243,9 @@ void loop()
 {
     long cMillis = millis();
     
-    if (cMillis - pMillis >= interval && i < 1000) {    // will run every interval
+    if (cMillis - pMillis >= interval) {    // will run every interval
         bno.getQuaternions(interval / 1000.0);
+        //bno.getBnoData();
         pMillis = cMillis;
-        i++;
     }
-    
-    
 }
