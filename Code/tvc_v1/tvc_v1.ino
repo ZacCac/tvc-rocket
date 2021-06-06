@@ -1,31 +1,32 @@
 #include <Wire.h>
 #include <math.h>
 
+long pMillis = 0;            // ms (milliseconds)
+double interval = 100.0;     // ms (milliseconds)
+
+/*###############################################################################################*/
+
 class Bno055 
 {
 private:
     // Data Structs
-    struct Accelerometer {
-        double x, y, z;  // m/s^2
+    struct Xyz {                        // Struct for three axes
+        double x = 0, y = 0, z = 0;
     };
-    struct Magnetometer {
-        double x, y, z;  // mT
-    };
-    struct Gyroscope {
-        double x, y, z;  // rad/s (radians per second)
-    };
-    struct Quaternion {
+    struct Quaternion {                 // Quaternion Struct
         double w = 1.0, x = 0.0, y = 0.0, z = 0.0;   // initial conditions
         double wdot, xdot, ydot, zdot;
     };
 
     // initializing structs
-    Accelerometer a;
-    Magnetometer m;
-    Gyroscope g;
-    Quaternion q;
+    Xyz a;                              // Accelerometer
+    Xyz m;                              // Magnetometer
+    Xyz g;                              // Gyroscope
+    Xyz e;                              // Euler Angles
+    Xyz g_o;                            // Gyroscope offsets
+    Quaternion q;                       // Quaternions
 
-    //{
+    //https://cdn-shop.adafruit.com/datasheets/BST_BNO055_DS000_12.pdf
     const int BNO_ADDR = 0x28;          // I2C Address of the sensor                                            MAY CHANGE WITH MULTIPLE SENSORS
 
     const int PWR_MODE = 0x3E;          // Power mode,default normal                more info section 3.2
@@ -55,23 +56,23 @@ private:
     const int dps_to_rps_ = 0x02;       // changes units of gyr to rad/s            more info section 3.6.1
 
     const int MAG_DATA_X_LSB = 0x0E;    // Lower byte of X axis mag data
-    //}
+
 public:
-    /*  Initializes the BNO055 Sensor by setting up the specific configurations 
-        required, remapping axes, and preparing the sensor to read data     */
+    // Initializes the BNO055 Sensor by setting up the specific configurations required, remapping axes, and preparing the sensor to read data
     void InitializeBno() 
     {
-        char data[2];                        // temp variable to hold the addresses
+        char data[2];                       // temp variable to hold the addresses
+        int offset_iterations = 100;        // how many iterations will be used to find the average offset of the sensor
 
         // Resetting the power and operation modes back to default in case they were switched
         data[0] = PWR_MODE; data[1] = NORMAL;
         Wire.beginTransmission(BNO_ADDR);
         Wire.write(data, 2);
-        Wire.endTransmission(true); delay(100);
+        Wire.endTransmission(true); delay(20);
         data[0] = OPR_MODE; data[1] = CONFIGMODE;
         Wire.beginTransmission(BNO_ADDR);
         Wire.write(data, 2);
-        Wire.endTransmission(true); delay(100);
+        Wire.endTransmission(true); delay(20);
 
         // Remapping axes
         data[0] = AXIS_MAP_CONFIG; data[1] = yz_remap_;
@@ -107,12 +108,48 @@ public:
         data[0] = OPR_MODE; data[1] = AMG;
         Wire.beginTransmission(BNO_ADDR);
         Wire.write(data, 2);
-        Wire.endTransmission(true); delay(100);
+        Wire.endTransmission(true); delay(20);
 
         Serial.println("BNO055 Initialized");
+        Serial.print("Calibrating gyro, do not move");
+
+        // Summing up 100 gyroscope readings
+        for (int i = 0; i <= offset_iterations; i++)
+        {
+            Wire.beginTransmission(BNO_ADDR);
+            Wire.write(GYR_DATA_X_LSB);
+            Wire.endTransmission(false);
+            Wire.requestFrom(BNO_ADDR, 6, true);
+
+            g_o.x += (int16_t)(Wire.read() | Wire.read()<<8);
+            g_o.y += (int16_t)(Wire.read() | Wire.read()<<8);
+            g_o.z += (int16_t)(Wire.read() | Wire.read()<<8);
+
+            delay(interval/1000.0);
+
+            // Progress Bar
+            
+            if(i % 10 == 0) 
+            {
+                Serial.print(".");
+            }
+            
+        }
+        Serial.println();
+
+        // Averaging the gyroscope drift
+        g_o.x /= offset_iterations;
+        g_o.y /= offset_iterations;
+        g_o.z /= offset_iterations;
+        delay(100);
+
+        // Reading out offsets
+        Serial.print("Gyr X Offset: "); Serial.println(g_o.x);
+        Serial.print("Gyr Y Offset: "); Serial.println(g_o.y);
+        Serial.print("Gyr Z Offset: "); Serial.println(g_o.z);
     }
 
-    // Gets the raw data from the BNO055 Sensor, isAlone: whether this function is being called by itself (true) or within another function (false)
+    // Gets the raw data from the BNO055 Sensor
     void getBnoData(bool isAlone)
     {
         // Starts transmission with the sensor
@@ -130,9 +167,9 @@ public:
         m.y = (Wire.read() | Wire.read()<<8) / 16.00;   // mT
         m.z = (Wire.read() | Wire.read()<<8) / 16.00;   // mT
         
-        g.x = (int16_t)(Wire.read() | Wire.read()<<8) / 900.00 ;   // rad/s
-        g.y = (int16_t)(Wire.read() | Wire.read()<<8) / 900.00 ;   // rad/s
-        g.z = (int16_t)(Wire.read() | Wire.read()<<8) / 900.00 ;   // rad/s
+        g.x = ((int16_t)(Wire.read() | Wire.read()<<8) - g_o.x) / 900.00 ;   // rad/s
+        g.y = ((int16_t)(Wire.read() | Wire.read()<<8) - g_o.y) / 900.00 ;   // rad/s
+        g.z = ((int16_t)(Wire.read() | Wire.read()<<8) - g_o.z) / 900.00 ;   // rad/s
 
         // End transmission with the sensor
         Wire.endTransmission();
@@ -166,7 +203,7 @@ public:
     }
 
     // Calculates the quaternion position, dt is the sampling time in seconds
-    void getQuaternions(double dt)
+    void getQuaternions(double dt, bool isAlone)
     {
         getBnoData(false); // need gyro reading for quaternion calculations, within another function
         
@@ -218,15 +255,44 @@ public:
         Serial.print(" ");
         Serial.print(norm, 9);
 
-        Serial.println();
+        // terminates line or adds a space depending on whether it is in another function
+        if (isAlone == true) Serial.println();
+        else Serial.print(" ");  
+    }
+
+    // Converts the orientation from quaternions to euler angles
+    void quatToEuler(double dt, bool isAlone)
+    {
+        getQuaternions(dt, false);
+
+        // x-axis
+        double temp1 = 2 * (q.w * q.x + q.y * q.z);
+        double temp2 = 1 - 2 * (q.x * q.x + q.y * q.y);
+        e.x = atan2(temp1, temp2) * 180 / M_PI;
+
+        // y-axis
+        temp1 = 2 * (q.w * q.y - q.z * q.x);
+        if (abs(temp1) >= 1) e.y = copysign(90, temp1); // use 90 degrees if out of range
+        else e.y = asin(temp1) * 180 / M_PI;
+
+        // z-axis
+        temp1 = 2 * (q.w * q.z + q.x * q.y);
+        temp2 = 1 - 2 * (q.y * q.y + q.z * q.z);
+        e.z = atan2(temp1, temp2) * 180 / M_PI;
+
+        Serial.print(e.x);
+        Serial.print(" ");
+        Serial.print(e.y);
+        Serial.print(" ");
+        Serial.print(e.z);
+
+        // terminates line or adds a space depending on whether it is in another function
+        if (isAlone == true) Serial.println();
+        else Serial.print(" ");   
     }
 };
 
-Bno055 bno;                 // creating object bno
-
-long pMillis = 0;            // ms (milliseconds)
-double interval = 100.0;     // ms (milliseconds)
-
+Bno055 bno;                             // creating object bno
 
 void setup() 
 {
@@ -244,8 +310,9 @@ void loop()
     long cMillis = millis();
     
     if (cMillis - pMillis >= interval) {    // will run every interval
-        bno.getQuaternions(interval / 1000.0);
-        //bno.getBnoData();
+        //bno.getBnoData(true);
+        //bno.getQuaternions(interval / 1000.0, true);
+        bno.quatToEuler(interval / 1000.0, true);
         pMillis = cMillis;
     }
 }
