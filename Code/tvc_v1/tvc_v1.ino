@@ -1,18 +1,34 @@
 #include <Wire.h>
 #include <math.h>
+#include <Servo.h>
 
-long pMillis = 0;            // ms (milliseconds)
-double interval = 100.0;     // ms (milliseconds)
+struct Xyz {
+    double x = 0, y = 0, z = 0;
+};
+
+long pMillis = 0;                       // previous time in ms (milliseconds)
+double interval = 100.0;                // sampling interval in ms (milliseconds)
+uint8_t xPin = 22;                      // pin for the TVC x-axis servo
+uint8_t yPin = 21;                      // pin for the TVC y-axis servo
+uint8_t button = 15;
+int buttonState = 0;
+
+double xServoOffset = 90.0;              // offset of the TVC y-axis servo
+double yServoOffset = 90.0;              // offset of the TVC y-axis servo
+
+
 
 /*###############################################################################################*/
 
 class Bno055 
 {
 private:
+/*
     // Data Structs
     struct Xyz {                        // Struct for three axes
         double x = 0, y = 0, z = 0;
     };
+*/
     struct Quaternion {                 // Quaternion Struct
         double w = 1.0, x = 0.0, y = 0.0, z = 0.0;   // initial conditions
         double wdot, xdot, ydot, zdot;
@@ -62,7 +78,7 @@ public:
     void InitializeBno() 
     {
         char data[2];                       // temp variable to hold the addresses
-        int offset_iterations = 100;        // how many iterations will be used to find the average offset of the sensor
+        int offset_iterations = 1000;        // how many iterations will be used to find the average offset of the sensor
 
         // Resetting the power and operation modes back to default in case they were switched
         data[0] = PWR_MODE; data[1] = NORMAL;
@@ -129,7 +145,7 @@ public:
 
             // Progress Bar
             
-            if(i % 10 == 0) 
+            if(i % 100 == 0) 
             {
                 Serial.print(".");
             }
@@ -141,7 +157,6 @@ public:
         g_o.x /= offset_iterations;
         g_o.y /= offset_iterations;
         g_o.z /= offset_iterations;
-        delay(100);
 
         // Reading out offsets
         Serial.print("Gyr X Offset: "); Serial.println(g_o.x);
@@ -150,7 +165,7 @@ public:
     }
 
     // Gets the raw data from the BNO055 Sensor
-    void getBnoData(bool isAlone)
+    void getBnoData()
     {
         // Starts transmission with the sensor
         Wire.beginTransmission(BNO_ADDR);
@@ -192,20 +207,13 @@ public:
         Serial.print(g.y, 9);
         Serial.print(" ");
         Serial.print(g.z, 9);
-        
-        // terminates line or adds a space depending on whether it is in another function
-        if (isAlone == true) 
-        {
-            Serial.println();
-        } else {
-            Serial.print(" ");
-        }
+        Serial.print(" ");    
     }
 
     // Calculates the quaternion position, dt is the sampling time in seconds
-    void getQuaternions(double dt, bool isAlone)
+    void getQuaternions(double dt)
     {
-        getBnoData(false); // need gyro reading for quaternion calculations, within another function
+        getBnoData(); // need gyro reading for quaternion calculations, within another function
         
         // temp variables, represent half of each component of the quaternion vector
         double halfW = 0.5 * q.w;
@@ -254,16 +262,13 @@ public:
         Serial.print(q.z, 9);
         Serial.print(" ");
         Serial.print(norm, 9);
-
-        // terminates line or adds a space depending on whether it is in another function
-        if (isAlone == true) Serial.println();
-        else Serial.print(" ");  
+        Serial.print(" ");  
     }
 
     // Converts the orientation from quaternions to euler angles
-    void quatToEuler(double dt, bool isAlone)
+    struct Xyz quatToEuler(double dt)
     {
-        getQuaternions(dt, false);
+        getQuaternions(dt);
 
         // x-axis
         double temp1 = 2 * (q.w * q.x + q.y * q.z);
@@ -285,34 +290,79 @@ public:
         Serial.print(e.y);
         Serial.print(" ");
         Serial.print(e.z);
+        Serial.print(" ");  
 
-        // terminates line or adds a space depending on whether it is in another function
-        if (isAlone == true) Serial.println();
-        else Serial.print(" ");   
+        return e; 
     }
 };
 
+double tvcAngle(double);
+
 Bno055 bno;                             // creating object bno
+Servo xServo;                           // TVC x-axis servo
+Servo yServo;                           // TVC y-axis servo
+Xyz e;                                  // struct for Euler angles in TVC
+
+/*###############################################################################################*/
 
 void setup() 
 {
-  Wire.begin();
-  Serial.begin(112500);
-  delay(10);
 
-  bno.InitializeBno();
-  delay(100);
-  
+    Wire.begin();
+    Serial.begin(112500);
+    delay(10);
+
+    // linking the servos with their corresponding pins on the flight computer
+    xServo.attach(xPin);                
+    yServo.attach(yPin);
+
+    // aligning the TVC
+    xServo.write(xServoOffset);         
+    yServo.write(yServoOffset);
+
+    pinMode(button, INPUT);
+
+    Serial.println("Waiting for button press to start calibration");
+    while(buttonState == LOW) buttonState = digitalRead(button);
+    bno.InitializeBno();
+    delay(100);
 }
+
+/*###############################################################################################*/
 
 void loop() 
 {
     long cMillis = millis();
     
     if (cMillis - pMillis >= interval) {    // will run every interval
-        //bno.getBnoData(true);
-        //bno.getQuaternions(interval / 1000.0, true);
-        bno.quatToEuler(interval / 1000.0, true);
+        //bno.getBnoData();
+        //bno.getQuaternions(interval / 1000.0);
+        e = bno.quatToEuler(interval / 1000.0);
         pMillis = cMillis;
+        xServo.write(tvcAngle(e.x, xServoOffset));
+        yServo.write(tvcAngle(e.y, yServoOffset));
+        Serial.println();
     }
+}
+
+/*###############################################################################################*/
+
+double tvcAngle(double eulerAngle, double servoOffset)
+{
+    uint8_t axisScaleFactor = 3;
+    
+    int8_t maxAngle = 15;
+
+    double servoAngle = servoOffset - (eulerAngle / axisScaleFactor);   // calculates the angle that the servo needs to move to
+
+    // servo angles if the max angle is exceeded
+    if (servoAngle > servoOffset + maxAngle) servoAngle = servoOffset + maxAngle;
+    else if (servoAngle < servoOffset - maxAngle) servoAngle = servoOffset - maxAngle;
+
+    Serial.print(eulerAngle);
+    Serial.print(" ");
+    Serial.print(servoAngle);
+    Serial.print(" ");
+
+    return servoAngle;
 }
