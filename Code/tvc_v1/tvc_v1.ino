@@ -7,14 +7,16 @@ struct Xyz {
 };
 
 long pMillis = 0;                       // previous time in ms (milliseconds)
-double interval = 100.0;                // sampling interval in ms (milliseconds)
+double interval = 10.0;                 // sampling interval in ms (milliseconds)
 uint8_t xPin = 22;                      // pin for the TVC x-axis servo
 uint8_t yPin = 21;                      // pin for the TVC y-axis servo
+uint8_t pPin = 9;                       // pin for the parachute servo
 uint8_t button = 15;
 int buttonState = 0;
 
-double xServoOffset = 90.0;              // offset of the TVC y-axis servo
-double yServoOffset = 90.0;              // offset of the TVC y-axis servo
+double xServoOffset = 90.0;             // offset of the TVC y-axis servo
+double yServoOffset = 90.0;             // offset of the TVC y-axis servo
+int pServoPos = 90;                     // starting position of the parachute servo
 
 
 
@@ -301,6 +303,7 @@ double tvcAngle(double);
 Bno055 bno;                             // creating object bno
 Servo xServo;                           // TVC x-axis servo
 Servo yServo;                           // TVC y-axis servo
+Servo pServo;                           // parachute servo
 Xyz e;                                  // struct for Euler angles in TVC
 
 /*###############################################################################################*/
@@ -315,10 +318,12 @@ void setup()
     // linking the servos with their corresponding pins on the flight computer
     xServo.attach(xPin);                
     yServo.attach(yPin);
+    pServo.attach(pPin);
 
     // aligning the TVC
     xServo.write(xServoOffset);         
     yServo.write(yServoOffset);
+    pServo.write(pServoPos);
 
     pinMode(button, INPUT);
 
@@ -337,11 +342,15 @@ void loop()
     if (cMillis - pMillis >= interval) {    // will run every interval
         //bno.getBnoData();
         //bno.getQuaternions(interval / 1000.0);
-        e = bno.quatToEuler(interval / 1000.0);
-        pMillis = cMillis;
-        xServo.write(tvcAngle(e.x, xServoOffset));
-        yServo.write(tvcAngle(e.y, yServoOffset));
+        //e = bno.quatToEuler(interval / 1000.0);
+
+        //xServo.write(tvcAngle(e.x, xServoOffset));
+        //yServo.write(tvcAngle(e.y, yServoOffset));
+
+        parachuteDeploy();
+
         Serial.println();
+        pMillis = cMillis;
     }
 }
 
@@ -365,4 +374,19 @@ double tvcAngle(double eulerAngle, double servoOffset)
     Serial.print(" ");
 
     return servoAngle;
+}
+
+void parachuteDeploy()
+{
+    buttonState = digitalRead(button);
+    if (buttonState == HIGH) 
+    {
+        pServo.write(120);          // activate
+        Serial.println("ACTIVATED");
+        Serial.println("ACTIVATED");
+        Serial.println("ACTIVATED");
+
+        delay(1000);
+        pServo.write(pServoPos);
+    } 
 }
